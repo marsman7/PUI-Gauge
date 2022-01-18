@@ -4,11 +4,14 @@
 #include <TFT_eSPI.h>       // Hardware-specific library
 #include "esp_adc_cal.h"
 #include <INA219_WE.h>
+#include <AsyncINPUT.h>
 
 #define PROJECT_NAME "PUI-Gauge"
 
 #define ADC_EN              14  //ADC_EN is the ADC detection enable port
 #define ADC_PIN             34
+#define BUTTON_1             0
+#define BUTTON_2            35
 
 #define I2C_ADDRESS 0x40
 
@@ -24,13 +27,29 @@
 #define GAUGE_HIGH    55
 #define GAUGE_WIDTH   TFT_WIDTH
 #define GAUGE_FRAME_W 3
+#define GAUGE_TYPE_POWER 0
+#define GAUGE_TYPE_SHUNT 1
 
 TFT_eSPI tft = TFT_eSPI();  // Invoke custom library
 INA219_WE ina219 = INA219_WE(I2C_ADDRESS);
 
+uint16_t aButtonGpios[] = {
+  BUTTON_1 | AsyncInput::LOWAKTIV | AsyncInput::PULL_UP,
+  BUTTON_2 | AsyncInput::LOWAKTIV | AsyncInput::PULL_UP
+};
+
+AsyncInput myinputs = AsyncInput(2, aButtonGpios);
+
 boolean initial = 1;
 uint32_t targetTime = 0;
 int vref = 1100;
+
+uint8_t gauge3Type = GAUGE_TYPE_POWER;
+float shuntVoltage_mV = 0.0;
+float busVoltage_V = 0.0;
+float current_mA = 0.0;
+float power_mW = 0.0; 
+bool ina219_overflow = false;
 
 void showBattery()
 {
@@ -43,16 +62,11 @@ void showBattery()
         float battery_voltage = ((float)v / 4095.0) * 2.0 * 3.3 * (vref / 1000.0);
         // printf("Voltage : %f V\n", battery_voltage);
 
-        //tft.drawRoundRect(5, 70, TFT_WIDTH - 10, 32, 2, TFT_BROWN);
         tft.fillRoundRect(10, BATTERY_POS_Y + 3, TFT_WIDTH - 20, BATTERY_HIGH - 6, 3, COLOR_BACKGROUND);
         tft.setTextDatum(TC_DATUM);
         tft.setTextColor(TFT_SKYBLUE, COLOR_BACKGROUND);  // Adding a black background colour erases previous text automatically
         tft.drawFloat(battery_voltage, 2, TFT_WIDTH / 2 , BATTERY_POS_Y + 5, 2);
         tft.drawString("V", TFT_WIDTH / 2 + 35, BATTERY_POS_Y + 5, 2);
-
-        //tft.fillScreen(TFT_BLACK);
-        //tft.setTextDatum(MC_DATUM);
-        //tft.drawString(voltage,  tft.width() / 2, tft.height() / 2 );
 
         digitalWrite(ADC_EN, 0);
     }
@@ -73,6 +87,18 @@ void updateGauge(float value, int32_t pos_y, uint16_t color) {
   tft.setTextColor(color, COLOR_BACKGROUND);
   tft.setTextDatum(TC_DATUM);
   tft.drawFloat(value, 3, TFT_WIDTH / 2 , pos_y + 25, 4);
+}
+
+void myBtn1Callback(int16_t repeats, uint16_t flags) {
+  // printf("Button 1 Press Callback : %d | %04x\n", repeats, flags);
+  gauge3Type = GAUGE_TYPE_POWER;
+  showGauge("Power (mW)", POWER_POS_Y, TFT_PINK);
+}
+
+void myBtn2Callback(int16_t repeats, uint16_t flags) {
+  // printf("Button 2 Press Callback : %d | %04x\n", repeats, flags);
+  gauge3Type = GAUGE_TYPE_SHUNT;
+  showGauge("Shuntvoltage (mV)", POWER_POS_Y, TFT_CYAN);
 }
 
 void setup(void) {
@@ -96,26 +122,26 @@ void setup(void) {
   if (psramFound()) {
     printf("PSRAM         : %d \n", ESP.getPsramSize());
   } else {
-    printf("PSRAM not available\n");
+    printf("PSRAM         : not available\n");
   }
 
-  if(ina219.init()){
-    printf("INA219 connected : OK\n");
-  } else {
-    printf("INA219 not connected!\n");
-  }
-
-
-  // ADC Calibrierung
+  // internal ADC Calibrierung for Battery Voltage
   esp_adc_cal_characteristics_t adc_chars;
   esp_adc_cal_value_t val_type = esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_11, ADC_WIDTH_BIT_12, 1100, &adc_chars);    //Check type of calibration value used to characterize ADC
   if (val_type == ESP_ADC_CAL_VAL_EFUSE_VREF) {
-    printf("eFuse Vref:%u mV\n", adc_chars.vref);
+    printf("eFuse Vref    : %u mV\n", adc_chars.vref);
     vref = adc_chars.vref;
   } else if (val_type == ESP_ADC_CAL_VAL_EFUSE_TP) {
     printf("Two Point --> coeff_a:%umV coeff_b:%umV\n", adc_chars.coeff_a, adc_chars.coeff_b);
   } else {
-    printf("Default Vref: 1100mV\n");
+    printf("Default Vref  : 1100mV\n");
+  }
+
+  // Sensor INA219 init
+  if(ina219.init()){
+    printf("INA219 Sensor : OK\n");
+  } else {
+    printf("INA219 Sensor : not connected\n");
   }
 
   // Display initialisieren
@@ -149,7 +175,7 @@ void setup(void) {
   ina219.setADCMode(SAMPLE_MODE_128);
   ina219.setPGain(PG_160);
   ina219.setBusRange(BRNG_16);
-  ina219.setCorrectionFactor(0.5);
+  // ina219.setCorrectionFactor(1.00);
 
   // Hintergrund für Batteriespannung zeichnen
   tft.fillRoundRect(7, BATTERY_POS_Y, TFT_WIDTH - 14, BATTERY_HIGH, 3, TFT_SKYBLUE);
@@ -158,7 +184,15 @@ void setup(void) {
   showGauge("Voltage (V)", VOLTAGE_POS_Y, TFT_GREENYELLOW);
   showGauge("Current (mA)", CURRENT_POS_Y, TFT_ORANGE);
   showGauge("Power (mW)", POWER_POS_Y, TFT_PINK);
-  // updateGauge(2.34, VOLTAGE_POS_Y, TFT_GREENYELLOW);
+
+  // Button init
+  myinputs.onButtonPress(myBtn1Callback, BUTTON_1, AsyncInput::PRESS);
+  myinputs.onButtonPress(myBtn2Callback, BUTTON_2, AsyncInput::PRESS);
+  if (!myinputs.begin()) {
+    printf("Button-Task   : ERROR - Task not created\n");
+  } else {
+    printf("Button-Task   : OK\n");
+  }
 
   // Display Refresh Zeit initialisieren
   targetTime = millis() + 1000;
@@ -170,14 +204,8 @@ void loop() {
 
     showBattery();
 
-    // float shuntVoltage_mV = 0.0;
-    float busVoltage_V = 0.0;
-    float current_mA = 0.0;
-    float power_mW = 0.0; 
-    bool ina219_overflow = false;
-
     ina219.startSingleMeasurement(); // triggers single-shot measurement and waits until completed
-    // shuntVoltage_mV = ina219.getShuntVoltage_mV();
+    shuntVoltage_mV = ina219.getShuntVoltage_mV();
     busVoltage_V = ina219.getBusVoltage_V();
     current_mA = ina219.getCurrent_mA();
     power_mW = ina219.getBusPower();
@@ -185,8 +213,11 @@ void loop() {
 
     updateGauge(busVoltage_V, VOLTAGE_POS_Y, TFT_GREENYELLOW);
     updateGauge(current_mA, CURRENT_POS_Y, TFT_ORANGE);
-    updateGauge(power_mW, POWER_POS_Y, TFT_PINK);
-    // updateGauge(shuntVoltage_mV, POWER_POS_Y, TFT_PINK);
+    if (gauge3Type == GAUGE_TYPE_POWER) {
+      updateGauge(power_mW, POWER_POS_Y, TFT_PINK);
+    } else {
+      updateGauge(shuntVoltage_mV, POWER_POS_Y, TFT_CYAN);
+    }
 
     // printf("Shunt Voltage [mV]: %f\n", shuntVoltage_mV);
     // printf("Bus Voltage [V]: %f\n", busVoltage_V);
