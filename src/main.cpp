@@ -1,19 +1,20 @@
 #include <Arduino.h>
 #include <SPI.h>
 #include <Wire.h>
-#include <TFT_eSPI.h>       // Hardware-specific library
+#include <TFT_eSPI.h>
 #include "esp_adc_cal.h"
 #include <INA219_WE.h>
 #include <AsyncINPUT.h>
 
 #define PROJECT_NAME "PUI-Gauge"
 
-#define ADC_EN              14  //ADC_EN is the ADC detection enable port
-#define ADC_PIN             34
-#define BUTTON_1             0
-#define BUTTON_2            35
+#define ADC_EN          14  // ADC_EN is the ADC detection enable port, activate voltage divider
+#define ADC_PIN         34  // Battery voltage ADC Input
+#define BUTTON_1         0  // Right built in button
+#define BUTTON_2        35  // Left built in button
 
-#define I2C_ADDRESS 0x40
+#define I2C_ADDRESS     0x40
+#define CURRENT_OFFSET +1.300   // Wird bei der Shuntspannung nicht beruecksichtigt
 
 #define COLOR_GREY 0xBDF7
 #define COLOR_BACKGROUND 0x1082 // 0x2104  // 0x8410    // TFT_DARKGREY
@@ -64,11 +65,11 @@ void showBattery()
 
         tft.fillRoundRect(10, BATTERY_POS_Y + 3, TFT_WIDTH - 20, BATTERY_HIGH - 6, 3, COLOR_BACKGROUND);
         tft.setTextDatum(TC_DATUM);
-        tft.setTextColor(TFT_SKYBLUE, COLOR_BACKGROUND);  // Adding a black background colour erases previous text automatically
+        tft.setTextColor(TFT_SKYBLUE, COLOR_BACKGROUND);
         tft.drawFloat(battery_voltage, 2, TFT_WIDTH / 2 , BATTERY_POS_Y + 5, 2);
         tft.drawString("V", TFT_WIDTH / 2 + 35, BATTERY_POS_Y + 5, 2);
 
-        digitalWrite(ADC_EN, 0);
+        digitalWrite(ADC_EN, 0);  // deactive voltage divider to prevent battery discharge
     }
 }
 
@@ -148,14 +149,14 @@ void setup(void) {
   tft.init();
   tft.setRotation(0);
   tft.fillScreen(TFT_BLACK);
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);  // Adding a black background colour erases previous text automatically
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
   
   // Only font numbers 2,4,6,7 are valid. Font 6 only contains characters [space] 0 1 2 3 4 5 6 7 8 9 : . a p m
   // Font 7 is a 7 segment font and only contains characters [space] 0 1 2 3 4 5 6 7 8 9 : .
   tft.drawCentreString(PROJECT_NAME, TFT_WIDTH / 2, 1, 4);
 
   /*
-  tft.setTextColor(TFT_DARKGREEN, TFT_BLACK);  // Adding a black background colour erases previous text automatically
+  tft.setTextColor(TFT_DARKGREEN, TFT_BLACK);
   tft.setCursor(1,25);
   tft.printf("Core       : %d MHz\n", ESP.getCpuFreqMHz());
   tft.setCursor(1,35);
@@ -207,8 +208,8 @@ void loop() {
     ina219.startSingleMeasurement(); // triggers single-shot measurement and waits until completed
     shuntVoltage_mV = ina219.getShuntVoltage_mV();
     busVoltage_V = ina219.getBusVoltage_V();
-    current_mA = ina219.getCurrent_mA();
-    power_mW = ina219.getBusPower();
+    current_mA = ina219.getCurrent_mA() + CURRENT_OFFSET;
+    power_mW = busVoltage_V * current_mA;  // ina219.getBusPower();
     ina219_overflow = ina219.getOverflow();
 
     updateGauge(busVoltage_V, VOLTAGE_POS_Y, TFT_GREENYELLOW);
