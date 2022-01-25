@@ -4,7 +4,7 @@
 #include <TFT_eSPI.h>
 #include "esp_adc_cal.h"
 #include <INA219_WE.h>
-#include <AsyncINPUT.h>
+#include <asyncinput.h>
 
 #define PROJECT_NAME "PUI-Gauge"
 
