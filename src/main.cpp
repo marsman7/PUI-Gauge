@@ -215,7 +215,7 @@ void loop() {
     updateGauge(busVoltage_V, VOLTAGE_POS_Y, TFT_GREENYELLOW);
     updateGauge(current_mA, CURRENT_POS_Y, TFT_ORANGE);
     if (gauge3Type == GAUGE_TYPE_POWER) {
-      updateGauge(power_mW, POWER_POS_Y, TFT_PINK);
+      updateGauge(abs(power_mW), POWER_POS_Y, TFT_PINK);
     } else {
       updateGauge(shuntVoltage_mV, POWER_POS_Y, TFT_CYAN);
     }
